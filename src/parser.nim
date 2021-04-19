@@ -39,8 +39,8 @@ type
         text: string 
         pos: int 
         chr: char 
-        #toks: seq[Token]
         error: bool
+        errorStr: string
     
     #Defines the parser, will take text, produce the AST
     Parser* = object
@@ -95,7 +95,7 @@ func newLexer(text: string): Lexer =
         firstChr = text[0]
 
     #Returns an instance of a lexer
-    Lexer(text: text, pos: 0, chr: firstChr, error: false)
+    Lexer(text: text, pos: 0, chr: firstChr, error: false, errorStr: "")
 
 #Returns a new token tuple (used only by the lexer)
 func newToken(tokenType: TokenType, tokValue: string, column: int): Token =
@@ -172,13 +172,15 @@ proc getKeyword(lexer: var Lexer): Token =
     elif keyword in @["DIS", "DISADVANTAGE", "DISADV", "DISAD"]:
         return newToken(Disadvantage, keyword, position)
 
-    else: #Otherwise, unknown keyword
+    else: #Otherwise, unknown keyword, raise error
+        lexer.error = true
+        lexer.errorStr = fmt"Error, the keyword '{keyword}' is not a recognized command."
         return newToken(Unknown, keyword, position)
 
 #Attempts to get a new token and return it
 proc nextToken(lexer: var Lexer): Token = 
     #Continue trying to get a token while a valid index
-    while lexer.pos < len(lexer.text):
+    while lexer.pos < len(lexer.text) and not lexer.error:
         let chr = lexer.chr #current char
 
         #Skip over all whitespace
@@ -224,6 +226,12 @@ proc nextToken(lexer: var Lexer): Token =
             
             return lexer.newAdvToken(opTokType, $chr)
 
+        #Unknown char, raise an error
+        else: 
+            lexer.error = true
+            lexer.errorStr = fmt"Error, don't recognize the character '{chr}'"
+            return newToken(Unknown, $chr, lexer.pos)
+
     newToken(Eol, "Eol", lexer.pos)
 
 #Gets all of the tokens possible from lexing
@@ -231,7 +239,7 @@ proc getAllTokens(lexer: var Lexer): seq[Token] =
     var token = lexer.nextToken()
 
     #Continue adding tokens until out of tokens
-    while token.tokType != Eol:
+    while token.tokType != Eol and not lexer.error:
         result.add(token)
         token = lexer.nextToken()
 
@@ -300,6 +308,11 @@ proc newParser*(text: string): Parser =
     else: #Otherwise, set error
         errorState = true
         errorStr = "Eol encountered"
+    
+    #Check if the lexer gave us an error, pass on error
+    if lexer.error:
+        errorState = true
+        errorStr = lexer.errorStr
 
     #Return the instance of the parser
     Parser(lexer: lexer, currToken: firstTok, tokenIndex: 0, tokens: tokens, error: errorState, errorStr: errorStr)
