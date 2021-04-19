@@ -1,0 +1,18 @@
+statement: expr
+
+expr: <term> ((+ | -) <term>)*
+term: <unit> ((* | / | % | MOD) <unit>)*
+unit: - <unit>
+    | ( <expr> )
+    | INTEGER
+    | <roll>
+    | <sum>
+
+roll: singleDice | listRoll | sumRoll
+
+singleDice: 1 d <unit>
+listRoll:   <expr> d <expr>
+sumRoll:    <expr> ds <expr>
+
+list:      [ <expr>* ]
+sum:       sum <list>
