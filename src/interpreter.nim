@@ -9,6 +9,8 @@
     result.                                 ]#
 import strutils
 import parser
+import tables
+import strformat
 from random import rand
 
 type
@@ -60,16 +62,16 @@ template checkReport(report: CheckReport) =
         return report
 
 #Forward declare this function for easy recursive calls.
-proc check*(statement: Node): CheckReport 
+proc check*(statement: Node, env:Table[string, EValue]): CheckReport 
 
 #Checking a number is one of the few guarenteed things
 proc checkNumber(integer: Node): CheckReport =
     newCheckReport(CInt, false, "")
 
 #Checks each value in a list
-proc checkList(list: Node): CheckReport =
+proc checkList(list: Node, env:Table[string, EValue]): CheckReport =
     for value in (List list).values:
-        let elemReport = check(value) #Get report on this expression
+        let elemReport = check(value, env) #Get report on this expression
         elemReport.checkReport()      #Check if there is an error to give
 
         #if there is a nested list within this list, raise an error
@@ -80,10 +82,10 @@ proc checkList(list: Node): CheckReport =
     newCheckReport(CList, false, "")
 
 #For the unary operation, it just checks it's node
-proc checkUnaryOp(unaryOp: Node): CheckReport =
+proc checkUnaryOp(unaryOp: Node, env: Table[string, EValue]): CheckReport =
     let 
         #Check the type of the value
-        operand = check((UnaryOp unaryOp).value)
+        operand = check((UnaryOp unaryOp).value, env)
         #Get the operator that is acting upon the value
         operator = (UnaryOp unaryOp).operator
 
@@ -98,15 +100,15 @@ proc checkUnaryOp(unaryOp: Node): CheckReport =
     return operand
 
 #Checks types of operands to see if there is a type error
-proc checkBinOp(binOp: Node): CheckReport =
+proc checkBinOp(binOp: Node, env: Table[string, EValue]): CheckReport =
     let #Get operator and left side value
         op   = (BinOp binOp).operator
-        left = check((BinOp binOp).left)
+        left = check((BinOp binOp).left, env)
 
     left.checkReport() #Check report from left value for error
 
     #Get the right value, and check it for an error
-    let right = check((BinOp binOp).right)
+    let right = check((BinOp binOp).right, env)
     right.checkReport()
 
     #If the left value is a number, right is list, op is div, raise error
@@ -124,7 +126,7 @@ proc checkBinOp(binOp: Node): CheckReport =
         return newCheckReport(CInt, false, "")
 
 #Checks out types for dice.
-proc checkDice(dice: Node): CheckReport =
+proc checkDice(dice: Node, env: Table[string, EValue]): CheckReport =
     let 
         diceType = (Dice dice).operator
         times    = (Dice dice).times
@@ -142,28 +144,49 @@ proc checkDice(dice: Node): CheckReport =
 
 #This will go through all the nodes in the parsed sub expressions
 # to find out if the types check out for this.
-proc check(statement: Node): CheckReport =
+proc check(statement: Node, env: Table[string, EValue]): CheckReport =
     #Find out what this node is, and check it out
     if statement of Number:
         result = checkNumber(statement)
     
     elif statement of List:
-        result = checkList(statement)
+        result = checkList(statement, env)
     
     elif statement of Dice:
-        result = checkDice(statement)
+        result = checkDice(statement, env)
     
     elif statement of UnaryOp:
-        result = checkUnaryOp(statement)
+        result = checkUnaryOp(statement, env)
     
     elif statement of BinOp:
-        result = checkBinOp(statement)
+        result = checkBinOp(statement, env)
+    
+    #Just check the value of the assignment
+    elif statement of Assignment:
+        return check((Assignment statement).value, env)
+    
+    elif statement of VariableRecall:
+        #If this variable exists in environment, pull the type info of its value
+        if (VariableRecall statement).name in env:
+            let val: EValue = env[(VariableRecall statement).name]
+
+            case val.evalType:
+                of EInt:
+                    return newCheckReport(CInt, false, "")
+                of EList:
+                    return newCheckReport(CList, false, "")
+                of EErr:
+                    return newCheckReport(CErr, true, "Undef Error")
+            
+        #Else, variable doesn't exist, complain
+        else:
+            return newCheckReport(CErr, true, fmt"Variable '{(VariableRecall statement).name}' is not declared.")
 
 
 #=========[  INTERPRETER  ]=========#
 
 #Creates a new instance of the interpreter
-proc newInterpreter*(text: string): Interpreter =
+proc newInterpreter*(text: string, env: Table[string, EValue]): Interpreter =
     var parser = newParser(text) #Creates the parser to be used
     let ast    = parser.parse()  #Attempt to parse the text
     var #Make the error, errorStr, may be changed to any sub errors
@@ -171,7 +194,7 @@ proc newInterpreter*(text: string): Interpreter =
         errorStr = ""
     
     #Get a report on how it is
-    let report = check(ast)
+    let report = check(ast, env)
 
     #Before checking type errors, if there are any
     # parsing errors, interpreter adopts that error
@@ -223,7 +246,7 @@ proc `$`*(val: EValue): string =
 #==========[ EVAL FUNCTIONS ]==========#
 
 #Predeclare this function so we can have RECURSION
-proc eval*(node: Node, lastAnswer: EValue): EValue 
+proc eval*(node: Node, lastAnswer: EValue, env:var Table[string, EValue]): EValue 
 
 #Checks if an error occured, if it did, pass it on.
 template checkError(value: EValue) =
@@ -231,14 +254,14 @@ template checkError(value: EValue) =
         return value
 
 #Evaluates a list of values.
-proc evalList(node: Node, lastAnswer: EValue): EValue = 
+proc evalList(node: Node, lastAnswer: EValue, env:var Table[string, EValue]): EValue = 
     #All of the evaluated return values
     var evaluatedVals: seq[EValue] = @[]
 
     #Go for each value and evaliate each one
     for value in (List node).values:
         #Evaluate this element in this list
-        let evaluatedVal = eval(value, lastAnswer)
+        let evaluatedVal = eval(value, lastAnswer, env)
         #Check if there was an error in evaluation
         evaluatedVal.checkError()
         #Add this evaluated value to the list
@@ -277,12 +300,12 @@ proc countin(item:int, vals: seq[EValue]): int =
     return count
 
 #Evaluate the dice and return its' value
-proc evalDice(node: Node, lastAnswer: EValue): EValue =
+proc evalDice(node: Node, lastAnswer: EValue, env:var Table[string, EValue]): EValue =
     let 
         #The number of times the dice should be rolled.
-        timesNode = eval((Dice node).times, lastAnswer)
+        timesNode = eval((Dice node).times, lastAnswer, env)
         #The number of sides this dice has.
-        sidesNode = eval((Dice node).sides, lastAnswer)
+        sidesNode = eval((Dice node).sides, lastAnswer, env)
     
     #Check if there are any errors for times and sides
     timesNode.checkError()
@@ -319,10 +342,10 @@ proc evalDice(node: Node, lastAnswer: EValue): EValue =
         return newEList(list)
 
 #Evaluates a unary operator, be it sum or negation
-proc evalUnaryOp(node: Node, lastAnswer: EValue): EValue =
+proc evalUnaryOp(node: Node, lastAnswer: EValue, env:var Table[string, EValue]): EValue =
     let #Get the operator & value operating on
         operator = (UnaryOp node).operator
-        value    = eval((UnaryOp node).value, lastAnswer)
+        value    = eval((UnaryOp node).value, lastAnswer, env)
     
     #Check if there was an error with evaluating the value
     value.checkError()
@@ -408,7 +431,7 @@ proc evalUnaryOp(node: Node, lastAnswer: EValue): EValue =
         let #The first calculated roll from this node
             firstRoll = getEInt(value)
             #Take another shot at calculating a different value.
-            secondRoll = getEInt(eval((UnaryOp node).value, lastAnswer))
+            secondRoll = getEInt(eval((UnaryOp node).value, lastAnswer, env))
 
         #If the two values are the same, return first
         if firstRoll == secondRoll:
@@ -429,7 +452,7 @@ proc evalUnaryOp(node: Node, lastAnswer: EValue): EValue =
         let #The first calculated roll from this node
             firstRoll = getEInt(value)
             #Take another shot at calculating a different value.
-            secondRoll = getEInt(eval((UnaryOp node).value, lastAnswer))
+            secondRoll = getEInt(eval((UnaryOp node).value, lastAnswer, env))
 
         #If the two values are the same, return first
         if firstRoll == secondRoll:
@@ -629,11 +652,11 @@ proc evalBinLeftList(operator: TokenType, left: seq[EValue], right: int, lastAns
         return evalBinLeftInt(operator, right, left, lastAnswer)
 
 #Evaluates some sort of binary operation.
-proc evalBinOp(node: Node, lastAnswer: EValue): EValue =
+proc evalBinOp(node: Node, lastAnswer: EValue, env:var Table[string, EValue]): EValue =
     let
         operator  = (BinOp node).operator
-        left      = eval((BinOp node).left, lastAnswer)
-        right     = eval((BinOp node).right, lastAnswer)
+        left      = eval((BinOp node).left, lastAnswer, env)
+        right     = eval((BinOp node).right, lastAnswer, env)
         leftType  = left.evalType
         rightType = right.evalType
     
@@ -656,26 +679,59 @@ proc evalBinOp(node: Node, lastAnswer: EValue): EValue =
 
 #Evaluates any node, figures out what kind of 
 # node this is and then evaluates it accordingly
-proc eval*(node: Node, lastAnswer: EValue): EValue =
+proc eval*(node: Node, lastAnswer: EValue, env:var Table[string, EValue]): EValue =
     #If the value is just a number, return the number.
     if node of Number:
         return newEInt((Number node).value)
 
+    #Pull out the value of the variable
+    elif node of VariableRecall:
+        let name = (VariableRecall node).name
+
+        if name notin env:
+            return newEErr(fmt"Undefined variable, {name}")
+
+        #Pull out the value of this variable
+        let value: EValue = env[name]
+        
+        #Return the value
+        return value
+
+    #Stores value in a variable
+    elif node of Assignment:
+        let node = (Assignment node)
+        
+        #If this term is not a variable recall, then this is malformed.
+        if not (node.variable of VariableRecall):
+            return newEErr("Malformed assignment operator! First term cannot be an expression.\nUse form VARIABLE = EXPRESSION")
+
+        let 
+            name = (VariableRecall node.variable).name
+            value = eval(node.value, lastAnswer, env)
+        
+        #Ensure there is no error
+        value.checkError() 
+
+        #Store value of variable in environment
+        env[name] = value
+
+        return value
+
     #If this is a list, try to evalutate it.
     elif node of List:
-        return evalList(node, lastAnswer)
+        return evalList(node, lastAnswer, env)
     
     #If this is a dice, evaluate it.
     elif node of Dice:
-        return evalDice(node, lastAnswer)
+        return evalDice(node, lastAnswer, env)
 
     #If this is a unary operation, evaluate it
     elif node of UnaryOp:
-        return evalUnaryOp(node, lastAnswer)
+        return evalUnaryOp(node, lastAnswer, env)
     
     #If this is some binary operation, evaluate it.
     elif node of BinOp:
-        return evalBinOp(node, lastAnswer)
+        return evalBinOp(node, lastAnswer, env)
 
     #If this node is the previously computed answer, return it
     elif node of LastAnswer:

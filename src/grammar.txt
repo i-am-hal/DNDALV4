@@ -1,4 +1,9 @@
 statement: expr
+         | assignment
+	   | calcAssign
+
+assignment: varName = expr
+calcAssign: varName ('+=' | '-=' | '*=' | '/=') expr
 
 expr: <term> ((+ | -) <term>)*
 term: <unit> ((* | / | % | MOD) <unit>)*
@@ -7,8 +12,17 @@ unit: - <unit>
     | INTEGER
     | <roll>
     | <sum>
+    | varName
+    | lastResult
+
+lastResult: result 
+
+varName: (A-Z)(-A-Za-z_)*
 
 roll: singleDice | listRoll | sumRoll
+    | advRoll | disAdRoll
+
+advRoll: advantage <
 
 singleDice: 1 d <unit>
 listRoll:   <expr> d <expr>

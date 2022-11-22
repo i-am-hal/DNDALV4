@@ -9,11 +9,20 @@
 from strutils import isSpaceAscii, isDigit, toUpperAscii, parseInt, Letters
 import strformat
 
+#All of the letters that a variable identifier can consist of
+const VariableIdent* = {'A'..'Z', 'a'..'z', '-', '_'}
+
 type
     #All of the different types of tokens
     TokenType* = enum
         Eol
         Unknown
+        Assign
+        PEqual
+        SEqual
+        DEqual
+        MEqual
+        VariableName
         Rparen
         Lparen
         Rbracket
@@ -37,7 +46,7 @@ type
     #The lexer datatype, this will slowly chop input into lexemes (tokens)
     Lexer* = object 
         text: string 
-        pos: int 
+        pos*: int 
         chr: char 
         error: bool
         errorStr: string
@@ -59,6 +68,15 @@ type
 
     #Only variable, tells us to load in last result
     LastAnswer* = ref object of Node
+
+    #Name of some variable -- recalls the value
+    VariableRecall* = ref object of Node
+        name*: string
+    
+    #Assigns some value to a variable
+    Assignment* = ref object of Node
+        variable*: Node 
+        value*: Node
 
     #An integer value.
     Number* = ref object of Node
@@ -137,7 +155,7 @@ proc getKeyword(lexer: var Lexer): Token =
     let position = lexer.pos #Position of this keyword
 
     #Add each character to this keyword
-    while lexer.chr in Letters and lexer.pos < len(lexer.text):
+    while lexer.chr in VariableIdent and lexer.pos < len(lexer.text):
         keyword.add(lexer.chr)
         lexer.advance()
     
@@ -173,9 +191,17 @@ proc getKeyword(lexer: var Lexer): Token =
         return newToken(Disadvantage, keyword, position)
 
     else: #Otherwise, unknown keyword, raise error
-        lexer.error = true
-        lexer.errorStr = fmt"Error, the keyword '{keyword}' is not a recognized command."
-        return newToken(Unknown, keyword, position)
+        #lexer.error = true
+        #lexer.errorStr = fmt"Error, the keyword '{keyword}' is not a recognized command."
+        return newToken(VariableName, keyword, position)
+
+#Peek one character ahead
+proc peek(self: var Lexer): char =
+    if self.pos + 1 < len(self.text):
+        return self.text[self.pos + 1]
+
+    else:
+        return '\0'
 
 #Attempts to get a new token and return it
 proc nextToken(lexer: var Lexer): Token = 
@@ -184,7 +210,7 @@ proc nextToken(lexer: var Lexer): Token =
         let chr = lexer.chr #current char
 
         #Skip over all whitespace
-        if chr.isSpaceAscii():
+        if chr in " \t": #chr.isSpaceAscii():
             lexer.skipSpaces()
 
         #If this is a number, get it
@@ -194,6 +220,10 @@ proc nextToken(lexer: var Lexer): Token =
         #If this is a letter, return keyword
         elif chr in Letters:
             return lexer.getKeyword()
+
+        #If assignment operator
+        elif chr == '=':
+            return lexer.newAdvToken(Assign, "=")
 
         #If this is a comment, then strip it out
         elif chr == ';':
@@ -214,7 +244,7 @@ proc nextToken(lexer: var Lexer): Token =
             return lexer.newAdvToken(Rbracket, "]")
 
         #Takes any of the operators and makes it into a token
-        elif chr in "+-*/%":
+        elif chr in "+-*/%" and lexer.peek() != '=':
             #Gets the type for the operation
             let opTokType = 
                 case chr:
@@ -226,6 +256,22 @@ proc nextToken(lexer: var Lexer): Token =
             
             return lexer.newAdvToken(opTokType, $chr)
 
+        #If a multiply equal built-in macro
+        elif chr in "+-*/" and lexer.peek() == '=':
+            lexer.advance()
+            lexer.advance()
+
+            #Cover all of the different macro equals
+            case chr:
+                of '+':
+                    return newToken(PEqual, "+=", lexer.pos)
+                of '-':
+                    return newToken(SEqual, "-=", lexer.pos)
+                of '/':
+                    return newToken(DEqual, "/=", lexer.pos)
+                else:
+                    return newToken(MEqual, "*=", lexer.pos)
+
         #Unknown char, raise an error
         else: 
             lexer.error = true
@@ -233,6 +279,14 @@ proc nextToken(lexer: var Lexer): Token =
             return newToken(Unknown, $chr, lexer.pos)
 
     newToken(Eol, "Eol", lexer.pos)
+
+proc peekToken(self: var Lexer): Token =
+    let pos = self.pos
+    discard self.nextToken()
+    #Save result
+    result = self.nextToken()
+    #Reset position to original position
+    self.pos = pos
 
 #Gets all of the tokens possible from lexing
 proc getAllTokens(lexer: var Lexer): seq[Token] =
@@ -257,6 +311,12 @@ func newLastAnswer: Node = LastAnswer()
 
 #Creates a new Number node
 func newNumber(value: string): Node = Number(value: parseInt(value))
+
+#Creates a new assignment node
+func newAssignment(variable: Node, value: Node): Node = Assignment(variable: variable, value: value)
+
+#Creates a new Variable Recall Node
+func newVarRecall(variable: string): Node = VariableRecall(name: variable)
 
 #Creates a new Binary Operation node
 func newBinOp(operator: TokenType, left, right: Node): Node =
@@ -332,6 +392,10 @@ proc eat(self: var Parser, expected: TokenType, error: string) =
         self.error = true
         self.errorStr = error
 
+#Peeks next token, returns the next token.
+proc peekNextToken(self: var Parser): Token =
+    self.lexer.peekToken()
+
 #Will try to eat and remove token w/ expected value. If fails, returns Noop node
 template eatToken(self: var Parser, expected: TokenType, errorStr: string) =
     #If an error has ALREADY occured, don't even try this.
@@ -368,7 +432,7 @@ proc unit(self: var Parser, nestedRoll = false): Node =
     var 
         tokenType = self.currToken.tokType #Get current token type
         tokenValue = self.currToken.value
-
+    
     #Parses the variable for the last variable
     if tokenType == LastResult:
         self.eatToken(LastResult, "Expected variable answer (for last result).")
@@ -404,6 +468,37 @@ proc unit(self: var Parser, nestedRoll = false): Node =
     elif tokenType == Integer:
         self.eatToken(Integer, "Expected an integer value.")
         result = newNumber(tokenValue)
+    
+    #If variable recall, parse!
+    elif tokenType == VariableName:
+        self.eatToken(VariableName, "Expected variable name.")
+
+        if self.currToken.tokType == Assign:
+            self.eatToken(Assign, "Expected assignment operator.")
+            result = newAssignment(newVarRecall(tokenValue), self.expression())
+        
+        #Unfold X += E into X = X + E
+        elif self.currToken.tokType == PEqual:
+            self.eat(PEqual, "Expected += operator.")
+            result = newAssignment(newVarRecall(tokenValue), newBinOp(Add, newVarRecall(tokenValue), self.expression()))
+        
+        #Unfold X -= E into X = X - E
+        elif self.currToken.tokType == SEqual:
+            self.eat(SEqual, "Expected -= operator.")
+            result = newAssignment(newVarRecall(tokenValue), newBinOp(Sub, newVarRecall(tokenValue), self.expression()))
+        
+        #Unfold X *= E into X = X * E
+        elif self.currToken.tokType == MEqual:
+            self.eat(MEqual, "Expected *= operator.")
+            result = newAssignment(newVarRecall(tokenValue), newBinOp(Mult, newVarRecall(tokenValue), self.expression()))
+        
+        #Unfold X /= E into X = X / E
+        elif self.currToken.tokType == DEqual:
+            self.eat(DEqual, "Expected /= operator.")
+            result = newAssignment(newVarRecall(tokenValue), newBinOp(Div, newVarRecall(tokenValue), self.expression()))
+        
+        else:
+            result = newVarRecall(tokenValue)
     
     #If this is a list, parse it!
     elif tokenType == Lbracket:

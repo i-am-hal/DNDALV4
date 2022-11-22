@@ -5,7 +5,7 @@
     Contains the REPL, error checking/displying
     code, and all of the code needed to display
     the result from some computation.            ]#
-import interpreter, parser, random, strutils, strformat
+import interpreter, parser, editor, random, strutils, strformat, tables
 import terminal
 
 #Clears out a line of text
@@ -31,7 +31,7 @@ proc displayString(minValue: int, xpos: var int, str: string) =
 proc getInput(history: var seq[string], historyIndex: var int, breakLoop: var bool): string =
     let 
         minXValue = 3
-        deleteChars = [char(127), char(126)]
+        deleteChars = [char(127)] #, char(126)]
 
     var 
         chr = '\0'
@@ -40,8 +40,9 @@ proc getInput(history: var seq[string], historyIndex: var int, breakLoop: var bo
 
     #Print out the prompt on this line
     stdout.write("> ")
+    return stdin.readLine().strip()
 
-    while chr notin "\n\r":
+    #[while chr notin "\n\r":
         chr = getch()
 
         #If this is a sequence about moving the cursor
@@ -89,9 +90,9 @@ proc getInput(history: var seq[string], historyIndex: var int, breakLoop: var bo
     #Add new line after this line of input
     stdout.write '\n'
 
-    return line.strip()
+    return line.strip()]#
 
-proc repl =
+proc repl* =
     stdout.eraseScreen()
     stdout.setCursorPos(0,0)
     randomize()
@@ -105,18 +106,45 @@ proc repl =
         history: seq[string] = @[""]
         #Break out of the program from ctrl+z
         breakLoop = false
+        #Environment-- holds all the user defined variables
+        env = initTable[string, EValue]()
+        #Environment of procedures-- a bundle of operations under a single name
+        procs = initTable[string, seq[Node]]()
+        #Working memory on current procedure
+        memory: seq[string] = @[]
 
     while true:
         #Index into history list
-        var historyIndex = 0
+        var 
+            historyIndex = 0
+            input = ""
 
-        let 
+        try:
             input = getInput(history, historyIndex, breakLoop)
-            words = input.strip().toUpperAscii().split()
+        except EOFError:
+            break
+
+        let words = input.strip().toUpperAscii().split()
         
         #If the user wants to exit the program, and they typed quit, quit
-        if len(words) > 0 and words[0] == "QUIT" or breakLoop:
+        if len(words) > 0 and words[0] in @["QUIT", "EXIT"] or breakLoop:
             break
+
+        elif len(words) > 0 and words[0] in @["EDIT", "EDITOR", "PROC"]:
+            memory = editor()
+            continue
+
+        #List out all the defined variables
+        elif len(words) > 0 and words[0] in @["VARS", "VAR", "VARIABLES", "VARIABLE"]:
+            if len(env) == 0:
+                echo "No variables are defined yet."
+            
+            else:
+                for name, val in env:
+                    echo fmt"{name} = {val}"
+            
+            stdout.write '\n'
+            continue
 
         #If this line is a comment, get input again
         elif len(input) > 1 and input[0] == ';':
@@ -124,16 +152,22 @@ proc repl =
             continue
 
         #Add this given line to the history of computations if last thing wasn't the same
-        if len(history) > 2 and history[1] != input:
-            history.insert(input, 1)
-        else:
-            history.insert(input, 1)
+        #[
+            if len(history) > 2 and history[1] != input:
+                history.insert(input, 1)
+            else:
+                history.insert(input, 1)
+        ]#
+        
+        #Catch nothing, repeat
+        if len(input) == 0:
+            continue
             
         var 
-            parser = newParser(input)      #Make the parser which will parse all the input
-            ast    = parser.parse()        #Parse the given input given to us
-            report = check(ast)            #Get a report on if there are any type errors
-            result = eval(ast, lastResult) #Evaluate the expression, see if any runetime errors occured
+            parser = newParser(input)           #Make the parser which will parse all the input
+            ast    = parser.parse()             #Parse the given input given to us
+            report = check(ast, env)            #Get a report on if there are any type errors
+            result = eval(ast, lastResult, env) #Evaluate the expression, see if any runetime errors occured
         
         #If the parser had some sort of error, report it
         if parser.error:
@@ -156,6 +190,7 @@ proc repl =
             #Print out the result
             echo result, "\n"
             
+    echo "Goodbye."
 
 #If this is the main function for all of this
 if isMainModule:
