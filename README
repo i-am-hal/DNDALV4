@@ -1,0 +1,49 @@
+# D&DAL ~ Version 4
+## Dungeons & Dragons Automation Language
+### A tool for a very lazy programmer.
+
+#### What the heck is this?
+D&DAL is a small program meant to emulate roll-20 style digital dice rolling.
+It supports the typically used syntax of 1dN or NdM to denote dice rolls.
+It also fully supports the basic arithmetic operators, allows for the creation
+of variables, and maybe in the future text editing.
+
+##### Why...? (Short Version)
+After getting burned very badly by my first experience being a GM in D&D, I
+sought to try to make my life as easier as I can manage. I was sick and
+annoyed of having to manage and roll seventeen thousand million times with
+physical dice for a horde of goblins. D&DAL allows me to quickly type out
+a dice roll, and to get it.
+
+##### How does it work???????
+It's a REPL interface. You type.
+
+```
+> 1d6
+Natural 6! x 1
+
+>
+```
+
+Here we rolled a single d6, ... we know this because it was *1d6.*
+
+###### *But I want a list of dice rolls!*
+```
+> 3d6
+[1 4 2]
+
+>
+```
+
+Yeah it's pretty easy actually. If in the notation of some number
+greater than 1 of some dice, it will spit back the list of the rolls.
+Note here, that it did not automatically take the sum of all these
+values. To do that, (assuming we got the same rolls) we would use
+*ds* (dice sum) instead of *d.*
+
+```
+> 3ds6
+7
+
+>
+```

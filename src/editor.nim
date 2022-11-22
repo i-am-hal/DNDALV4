@@ -75,7 +75,7 @@ proc editor*: seq[string] =
             stdout.write ':'
             halt = true
         
-        elif key == '\b' and mode != Normal and 
+        elif key == '\b' and mode != Normal and line != "":
             line = line[0..^2]
             xPos -= 1
             stdout.setCursorXPos(buff+xPos-2)
